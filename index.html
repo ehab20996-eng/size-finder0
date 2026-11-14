@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>اعرف مقاسك</title>
+<style>
+:root{--bg:#f6f4ee;--ink:#1c2340;--mut:#6b7090;--tape:#f2c230;--card:#fff;--line:#d9d6ca;--ok:#1f8a5b;--bad:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#141831;--ink:#f1efe6;--mut:#9aa0c4;--card:#1c2244;--line:#2e3563}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Tajawal","Segoe UI",Tahoma,sans-serif;line-height:1.6}
+main{max-width:460px;margin:0 auto;padding:20px 18px 40px}
+h1{font-size:28px;margin:8px 0 4px}
+.sub{color:var(--mut);margin:0 0 20px}
+.tape{height:14px;margin:0 0 18px;border-radius:2px;background:var(--tape);
+ background-image:repeating-linear-gradient(90deg,transparent 0 9px,rgba(28,35,64,.55) 9px 10px);
+ -webkit-mask:linear-gradient(#000,#000);}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+label{display:block;font-weight:700;margin:12px 0 6px}
+label:first-child{margin-top:0}
+input[type=number]{width:100%;font:inherit;font-size:20px;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+.seg{display:flex;gap:8px}
+.seg button{flex:1;font:inherit;padding:10px 4px;border:1.5px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);cursor:pointer}
+.seg button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.btn{width:100%;font:inherit;font-size:18px;font-weight:700;padding:14px;border:0;border-radius:10px;background:var(--tape);color:#1c2340;cursor:pointer}
+.btn.alt{background:transparent;border:1.5px solid var(--line);color:var(--ink);font-size:15px;font-weight:500;margin-top:10px}
+.btn:disabled{opacity:.5}
+.btn:focus-visible,.seg button:focus-visible,input:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.note{font-size:13px;color:var(--mut);margin:10px 0 0}
+#cam{display:none;position:relative;border-radius:12px;overflow:hidden;background:#000;margin:0 auto 14px;aspect-ratio:3/4;width:100%;max-height:78vh}
+#cam video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+#cam canvas{position:absolute;inset:0;width:100%;height:100%;transform:scaleX(-1)}
+#msg{position:absolute;bottom:0;left:0;right:0;padding:10px;text-align:center;background:rgba(20,24,49,.82);color:#fff;font-weight:700}
+#res{display:none}
+.size{font-size:72px;font-weight:800;line-height:1;margin:0}
+.conf{color:var(--ok);font-weight:700}
+table{width:100%;border-collapse:collapse;margin-top:10px}
+td{padding:6px 0;border-bottom:1px solid var(--line)}
+td:last-child{text-align:left;font-weight:700}
+.warn{color:var(--bad)}
+</style>
+</head>
+<body>
+<main>
+<h1>اعرف مقاسك في ٢٠ ثانية</h1>
+<p class="sub">من الموبايل نفسه، من غير متر ومن غير ما تقوم.</p>
+<div class="tape" aria-hidden="true"></div>
+
+<section class="card" id="form">
+  <label for="h">طولك (سم)</label>
+  <input id="h" type="number" inputmode="numeric" min="130" max="215" placeholder="175">
+  <label for="w">وزنك تقريبًا (كجم) — اختياري</label>
+  <input id="w" type="number" inputmode="numeric" min="35" max="200" placeholder="78">
+  <label>بتحب اللبس إزاي؟</label>
+  <div class="seg" id="fit">
+    <button type="button" data-v="-1">ضيق</button>
+    <button type="button" data-v="0" class="on">عادي</button>
+    <button type="button" data-v="1">واسع</button>
+  </div>
+  <p class="note">الصورة بتتحلل على موبايلك ومبتتبعتش ولا بتتخزن. بيطلع منها أرقام بس.</p>
+</section>
+
+<div id="cam"><video id="v" playsinline muted></video><canvas id="c"></canvas><div id="msg"></div></div>
+
+<button class="btn" id="go">افتح الكاميرا</button>
+<button class="btn alt" id="manual">كمّل من غير كاميرا (من الطول والوزن)</button>
+
+<section class="card" id="res" aria-live="polite">
+  <p class="sub" style="margin:0">مقاسك المناسب</p>
+  <p class="size" id="size"></p>
+  <p class="conf" id="conf"></p>
+  <p id="why"></p>
+  <table id="tbl"></table>
+  <p class="note">نموذج أولي: الأرقام تقديرية وتحتاج اختبار على قياسات حقيقية قبل الاعتماد عليها.</p>
+</section>
+</main>
+
+<script type="module">
+import {PoseLandmarker, FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $ = id => document.getElementById(id);
+let fit = 0;
+document.querySelectorAll('#fit button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#fit button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); fit = +b.dataset.v;
+});
+
+// جدول مقاسات المنتج (محيط الصدر بالسم) — غيّره حسب القطعة
+const SIZES = [["S",94],["M",102],["L",110],["XL",118],["XXL",126]];
+
+function bmiChest(h, w){ const bmi = w/((h/100)**2); return 100 + (bmi-24)*2.2 + (h-175)*0.1; }
+
+function pickSize(chest){
+  const eff = chest + fit*4;               // تفضيل الضيق/الواسع
+  let i = SIZES.findIndex(s => eff <= s[1]);
+  if (i < 0) i = SIZES.length-1;
+  const gap = Math.abs(SIZES[i][1]-eff);
+  return {i, eff, gap};
+}
+
+function show(chest, h, w, shoulder, source){
+  const {i, gap} = pickSize(chest);
+  const conf = Math.max(70, Math.min(96, 96 - (source==='bmi'?8:0) - Math.max(0, 5-gap)*1.5));
+  $('size').textContent = SIZES[i][0];
+  $('conf').textContent = `ثقة تقريبية ${Math.round(conf)}٪`;
+  const alt = fit===0 ? '' : (fit>0 ? 'اخترنا لك مقاس أكبر لأنك بتحب الواسع.' : 'اخترنا لك مقاس أضيق لأنك بتحب الضيق.');
+  $('why').textContent = `محيط صدرك التقريبي ${Math.round(chest)} سم. ${alt} ${gap<2 ? 'لو بين مقاسين، خد الأكبر.' : ''}`;
+  let rows = `<tr><td>محيط الصدر</td><td>${Math.round(chest)} سم</td></tr>`;
+  if (shoulder) rows += `<tr><td>عرض الكتف</td><td>${Math.round(shoulder)} سم</td></tr>`;
+  rows += `<tr><td>مصدر التقدير</td><td>${source==='pose'?'الكاميرا'+(w?' + الوزن':''):'الطول والوزن'}</td></tr>`;
+  $('tbl').innerHTML = rows;
+  $('res').style.display = 'block';
+  $('res').scrollIntoView({behavior:'smooth'});
+}
+
+function read(){
+  const h = +$('h').value, w = +$('w').value || 0;
+  if (h < 130 || h > 215) { alert('اكتب طولك بالسنتيمتر، مثلًا 175'); return null; }
+  return {h, w};
+}
+
+$('manual').onclick = () => {
+  const d = read(); if (!d) return;
+  if (!d.w) { alert('اكتب وزنك عشان نكمل من غير كاميرا'); return; }
+  show(bmiChest(d.h, d.w), d.h, d.w, 0, 'bmi');
+};
+
+let landmarker;
+async function load(){
+  if (landmarker) return landmarker;
+  const fs = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  landmarker = await PoseLandmarker.createFromOptions(fs, {
+    baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate:"GPU"},
+    runningMode:"VIDEO", numPoses:1});
+  return landmarker;
+}
+
+const med = a => { const s=[...a].sort((x,y)=>x-y); return s[Math.floor(s.length/2)]; };
+const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y, a.z-b.z);
+
+$('go').onclick = async () => {
+  const d = read(); if (!d) return;
+  $('go').disabled = true; $('res').style.display='none';
+  $('cam').style.display='block'; $('msg').textContent='بنجهّز الذكاء الاصطناعي…';
+  try {
+    const lm = await load();
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:720},height:{ideal:1280},aspectRatio:{ideal:0.75}}, audio:false});
+    const v = $('v'); v.srcObject = stream; await v.play();
+    const c = $('c'), box = $('cam');
+    c.width = box.clientWidth; c.height = box.clientHeight;
+    const ctx = c.getContext('2d');
+    const vw = v.videoWidth, vh = v.videoHeight;
+    const k = Math.max(c.width/vw, c.height/vh), ox = (c.width-vw*k)/2, oy = (c.height-vh*k)/2;
+    const P = p => [p.x*vw*k+ox, p.y*vh*k+oy];
+    const landscape = vw > vh;
+    $('msg').textContent = landscape ? 'لف الموبايل بالطول (وفك قفل الدوران)' : 'ابعد لحد ما نصك اللي فوق يبان (من الراس للحوض)، ووقف مستقيم';
+    const sh=[], ht=[]; let good = 0, t0 = 0, last = -1;
+    await new Promise(res => {
+      const loop = () => {
+        if (v.currentTime !== last) {
+          last = v.currentTime;
+          const r = lm.detectForVideo(v, performance.now());
+          ctx.clearRect(0,0,c.width,c.height);
+          if (r.landmarks[0]) {
+            ctx.strokeStyle='#f2c230'; ctx.lineWidth=3; ctx.beginPath();
+            for (const cn of PoseLandmarker.POSE_CONNECTIONS){ const a=P(r.landmarks[0][cn.start]), b=P(r.landmarks[0][cn.end]); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); }
+            ctx.stroke();
+            const L = r.landmarks[0], W = r.worldLandmarks[0];
+            const full = [0,11,12,23,24].every(k => (L[k].visibility ?? 0) > 0.6) && Math.max(L[23].y,L[24].y) < 0.99 && L[0].y > 0.01;
+            if (full) {
+              if (!t0) t0 = performance.now();
+              const left = 4 - (performance.now()-t0)/1000;
+              $('msg').textContent = left > 0 ? `ثبّت… ${Math.ceil(left)}` : 'تمام!';
+              sh.push(dist(W[11],W[12]));
+              const mid = (a,b) => ({x:(a.x+b.x)/2, y:(a.y+b.y)/2, z:(a.z+b.z)/2});
+              ht.push(dist(mid(W[11],W[12]), mid(W[23],W[24])));   // طول الجذع: من الكتف للحوض
+              good++;
+              if (left <= 0 && good > 15) return res();
+            } else { t0 = 0; sh.length = ht.length = 0; good = 0; $('msg').textContent = 'ابعد شوية وخلّي الراس والكتف والحوض في الكادر'; }
+          }
+        }
+        requestAnimationFrame(loop);
+      };
+      loop();
+    });
+    stream.getTracks().forEach(t => t.stop());
+    $('cam').style.display='none';
+    // نسبة المقياس: طول الجذع (كتف ← حوض) ≈ ٠.٢٩ من الطول الكلي
+    const scale = (d.h*0.288) / med(ht);
+    const shoulderJoint = med(sh) * scale;          // سم
+    const poseChest = 2.7 * shoulderJoint;           // تقدير تقريبي من الكتف
+    const chest = d.w ? 0.4*poseChest + 0.6*bmiChest(d.h, d.w) : poseChest;
+    show(chest, d.h, d.w, shoulderJoint + 4, 'pose');
+  } catch (e) {
+    console.error(e);
+    $('cam').style.display='none';
+    alert('الكاميرا أو النموذج مشتغلوش. اسمح للموقع بالكاميرا، أو كمّل بالطول والوزن.');
+  } finally { $('go').disabled = false; $('go').textContent = 'جرّب تاني'; }
+};
+</script>
+</body>
+</html>
